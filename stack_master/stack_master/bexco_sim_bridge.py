@@ -1,6 +1,5 @@
 import math
 import os
-import struct
 import time
 from typing import Dict, List, Tuple
 
@@ -83,7 +82,8 @@ def load_pcd_xyz(path: str) -> np.ndarray:
             raw = np.fromfile(fp, dtype=dtype, count=points if points > 0 else -1)
             xyz = np.column_stack((raw['x'], raw['y'], raw['z'])).astype(np.float32, copy=False)
         elif mode == 'binary_compressed':
-            raise ValueError('binary_compressed PCD is not supported yet; convert it to binary or ascii PCD')
+            raise ValueError(
+                'binary_compressed PCD is not supported yet; convert it to binary or ascii PCD')
         else:
             raise ValueError(f'Unsupported PCD DATA mode: {mode}')
 
@@ -98,6 +98,31 @@ def voxel_downsample(points: np.ndarray, voxel: float) -> np.ndarray:
     _, idx = np.unique(keys, axis=0, return_index=True)
     idx.sort()
     return points[idx]
+
+
+def nearest_angular_hits(points: np.ndarray, az_res: float, el_res: float) -> np.ndarray:
+    """Keep only the nearest point in each azimuth/elevation cell.
+
+    This is a deterministic visibility approximation for a static PCD.  It
+    prevents points behind a wall from being returned simply because they are
+    present in the accumulated map.
+    """
+    if len(points) == 0 or az_res <= 0.0 or el_res <= 0.0:
+        return points
+
+    ranges = np.linalg.norm(points, axis=1)
+    safe = np.maximum(ranges, 1e-6)
+    az = np.arctan2(points[:, 1], points[:, 0])
+    el = np.arcsin(np.clip(points[:, 2] / safe, -1.0, 1.0))
+    az_bin = np.floor((az + math.pi) / az_res).astype(np.int64)
+    el_bin = np.floor((el + math.pi / 2.0) / el_res).astype(np.int64)
+
+    # Combine two signed bin indices into a stable 64-bit key.
+    key = (az_bin << np.int64(32)) ^ (el_bin & np.int64(0xffffffff))
+    order = np.argsort(ranges, kind='stable')
+    _, first = np.unique(key[order], return_index=True)
+    keep = order[first]
+    return points[keep]
 
 
 def xyz_to_cloud(points: np.ndarray, stamp, frame_id: str) -> PointCloud2:
@@ -124,7 +149,7 @@ def xyz_to_cloud(points: np.ndarray, stamp, frame_id: str) -> PointCloud2:
 
 
 class BexcoSimBridge(Node):
-    """Hardware replacement for PC SIL.
+    """Hardware replacement layer for the PC software-in-the-loop setup.
 
     Input from the existing F1TENTH gym backend:
       /car_state/odom_GT
@@ -135,8 +160,8 @@ class BexcoSimBridge(Node):
       /sensors/imu/raw
       /livox/lidar
 
-    Ground-truth pose is used only inside this hardware emulator.  It is not
-    republished as the localized car state.
+    Ground-truth pose stays on the simulator side.  The real localization chain
+    receives only virtual sensor data and vehicle twist information.
     """
 
     def __init__(self):
@@ -152,6 +177,8 @@ class BexcoSimBridge(Node):
         self.declare_parameter('horizontal_fov', 2.0 * math.pi)
         self.declare_parameter('cloud_rate', 10.0)
         self.declare_parameter('map_voxel_size', 0.04)
+        self.declare_parameter('azimuth_resolution_deg', 0.4)
+        self.declare_parameter('elevation_resolution_deg', 0.4)
         self.declare_parameter('max_points', 120000)
         self.declare_parameter('lidar_x', 0.27)
         self.declare_parameter('lidar_y', 0.0)
@@ -171,6 +198,8 @@ class BexcoSimBridge(Node):
         self.z_max = float(self.get_parameter('z_max').value)
         self.horizontal_fov = float(self.get_parameter('horizontal_fov').value)
         self.cloud_period = 1.0 / max(0.1, float(self.get_parameter('cloud_rate').value))
+        self.az_res = math.radians(float(self.get_parameter('azimuth_resolution_deg').value))
+        self.el_res = math.radians(float(self.get_parameter('elevation_resolution_deg').value))
         self.max_points = int(self.get_parameter('max_points').value)
         self.lidar_xyz = np.array([
             float(self.get_parameter('lidar_x').value),
@@ -214,6 +243,8 @@ class BexcoSimBridge(Node):
         self.imu_pub.publish(out)
 
     def _odom_cb(self, msg: Odometry):
+        # full_localization/odom_to_twist_converter consumes /odom.twist.
+        # Pose remains available for debugging but is not the localized car state.
         odom = Odometry()
         odom.header = msg.header
         odom.header.frame_id = 'odom'
@@ -247,7 +278,8 @@ class BexcoSimBridge(Node):
         mask = (r2 >= self.range_min * self.range_min) & (r2 <= self.range_max * self.range_max)
 
         if not np.any(mask):
-            self.cloud_pub.publish(xyz_to_cloud(np.empty((0, 3), np.float32), odom.header.stamp, self.lidar_frame))
+            self.cloud_pub.publish(
+                xyz_to_cloud(np.empty((0, 3), np.float32), odom.header.stamp, self.lidar_frame))
             return
 
         local = np.column_stack((dx[mask], dy[mask], dz[mask])).astype(np.float32, copy=False)
@@ -262,8 +294,7 @@ class BexcoSimBridge(Node):
         c, s = math.cos(-self.lidar_yaw), math.sin(-self.lidar_yaw)
         x_l = c * x_b - s * y_b
         y_l = s * x_b + c * y_b
-        z_l = z_b
-        cloud = np.column_stack((x_l, y_l, z_l)).astype(np.float32, copy=False)
+        cloud = np.column_stack((x_l, y_l, z_b)).astype(np.float32, copy=False)
 
         mask = (cloud[:, 2] >= self.z_min) & (cloud[:, 2] <= self.z_max)
         if self.horizontal_fov < 2.0 * math.pi - 1e-3:
@@ -271,7 +302,10 @@ class BexcoSimBridge(Node):
             mask &= np.abs(angle) <= self.horizontal_fov * 0.5
         cloud = cloud[mask]
 
-        # Deterministic cap to protect scanmatcher from an excessively dense static map.
+        # First-hit visibility approximation: one nearest point per angular cell.
+        cloud = nearest_angular_hits(cloud, self.az_res, self.el_res)
+
+        # Deterministic cap to protect scanmatcher from an excessively dense cloud.
         if self.max_points > 0 and len(cloud) > self.max_points:
             step = int(math.ceil(len(cloud) / self.max_points))
             cloud = cloud[::step]
