@@ -101,12 +101,6 @@ def voxel_downsample(points: np.ndarray, voxel: float) -> np.ndarray:
 
 
 def nearest_angular_hits(points: np.ndarray, az_res: float, el_res: float) -> np.ndarray:
-    """Keep only the nearest point in each azimuth/elevation cell.
-
-    This is a deterministic visibility approximation for a static PCD.  It
-    prevents points behind a wall from being returned simply because they are
-    present in the accumulated map.
-    """
     if len(points) == 0 or az_res <= 0.0 or el_res <= 0.0:
         return points
 
@@ -116,13 +110,10 @@ def nearest_angular_hits(points: np.ndarray, az_res: float, el_res: float) -> np
     el = np.arcsin(np.clip(points[:, 2] / safe, -1.0, 1.0))
     az_bin = np.floor((az + math.pi) / az_res).astype(np.int64)
     el_bin = np.floor((el + math.pi / 2.0) / el_res).astype(np.int64)
-
-    # Combine two signed bin indices into a stable 64-bit key.
     key = (az_bin << np.int64(32)) ^ (el_bin & np.int64(0xffffffff))
     order = np.argsort(ranges, kind='stable')
     _, first = np.unique(key[order], return_index=True)
-    keep = order[first]
-    return points[keep]
+    return points[order[first]]
 
 
 def xyz_to_cloud(points: np.ndarray, stamp, frame_id: str) -> PointCloud2:
@@ -149,19 +140,11 @@ def xyz_to_cloud(points: np.ndarray, stamp, frame_id: str) -> PointCloud2:
 
 
 class BexcoSimBridge(Node):
-    """Hardware replacement layer for the PC software-in-the-loop setup.
+    """Virtual VESC/IMU/Livox hardware for PC SIL.
 
-    Input from the existing F1TENTH gym backend:
-      /car_state/odom_GT
-      /vesc/sensors/imu/raw
-
-    Outputs expected by the real 3D stack:
-      /odom
-      /sensors/imu/raw
-      /livox/lidar
-
-    Ground-truth pose stays on the simulator side.  The real localization chain
-    receives only virtual sensor data and vehicle twist information.
+    Ground truth is consumed only for virtual sensor rendering.  The /odom
+    output exposes twist for the real odom_to_twist_converter and deliberately
+    does not expose the map-frame ground-truth pose.
     """
 
     def __init__(self):
@@ -243,13 +226,12 @@ class BexcoSimBridge(Node):
         self.imu_pub.publish(out)
 
     def _odom_cb(self, msg: Odometry):
-        # full_localization/odom_to_twist_converter consumes /odom.twist.
-        # Pose remains available for debugging but is not the localized car state.
         odom = Odometry()
-        odom.header = msg.header
+        odom.header.stamp = msg.header.stamp
         odom.header.frame_id = 'odom'
         odom.child_frame_id = 'base_link'
-        odom.pose = msg.pose
+        odom.pose.pose.orientation.w = 1.0
+        odom.pose.covariance = [1e6] * 36
         odom.twist = msg.twist
         self.odom_pub.publish(odom)
 
@@ -265,7 +247,6 @@ class BexcoSimBridge(Node):
         bz = float(odom.pose.pose.position.z)
         yaw = _quat_to_yaw(odom.pose.pose.orientation)
 
-        # lidar origin in map coordinates
         cy, sy = math.cos(yaw), math.sin(yaw)
         lx = bx + cy * self.lidar_xyz[0] - sy * self.lidar_xyz[1]
         ly = by + sy * self.lidar_xyz[0] + cy * self.lidar_xyz[1]
@@ -284,13 +265,11 @@ class BexcoSimBridge(Node):
 
         local = np.column_stack((dx[mask], dy[mask], dz[mask])).astype(np.float32, copy=False)
 
-        # map axes -> base_link coordinates (inverse vehicle yaw)
         c, s = math.cos(-yaw), math.sin(-yaw)
         x_b = c * local[:, 0] - s * local[:, 1]
         y_b = s * local[:, 0] + c * local[:, 1]
         z_b = local[:, 2]
 
-        # base_link -> livox_frame. Translation was already accounted for at origin.
         c, s = math.cos(-self.lidar_yaw), math.sin(-self.lidar_yaw)
         x_l = c * x_b - s * y_b
         y_l = s * x_b + c * y_b
@@ -302,10 +281,8 @@ class BexcoSimBridge(Node):
             mask &= np.abs(angle) <= self.horizontal_fov * 0.5
         cloud = cloud[mask]
 
-        # First-hit visibility approximation: one nearest point per angular cell.
         cloud = nearest_angular_hits(cloud, self.az_res, self.el_res)
 
-        # Deterministic cap to protect scanmatcher from an excessively dense cloud.
         if self.max_points > 0 and len(cloud) > self.max_points:
             step = int(math.ceil(len(cloud) / self.max_points))
             cloud = cloud[::step]
