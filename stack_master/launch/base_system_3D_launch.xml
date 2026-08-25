@@ -10,6 +10,10 @@
   <arg name="pcd_file" default="$(var map_name).pcd" description="PCD file inside map_dir used as virtual Livox environment" />
   <arg name="sim_diagnostics" default="true"
     description="Simulation only: publish collision/PP/localization diagnostic topics" />
+  <arg name="sim_require_initialpose" default="true"
+    description="Simulation only: block vehicle motion until RViz 2D Pose Estimate publishes /initialpose" />
+  <arg name="sim_initialpose_hold_sec" default="0.25"
+    description="Simulation only: discard drive commands for this long after each /initialpose reset" />
   <arg name="mouse_estop" default="true"
     description="마우스 우클릭 한 번 = 정지, 다시 한 번 = 재출발 (조이스틱 e-stop 과 같은 래치)" />
   <arg name="mouse_estop_backend" default="auto"
@@ -28,6 +32,18 @@
 
   <!-- PC SIL: planner/controller/localization stay identical; only hardware is replaced. -->
   <group if="$(var sim)">
+    <!-- The autonomy stack still publishes /drive.  Only the simulated vehicle
+         receives the gated /sim/drive_to_gym topic. -->
+    <node pkg="stack_master" name="sim_initialpose_drive_gate"
+      exec="sim_initialpose_drive_gate" output="screen">
+      <param name="drive_in" value="/drive" />
+      <param name="drive_out" value="/sim/drive_to_gym" />
+      <param name="initialpose_topic" value="/initialpose" />
+      <param name="require_initialpose" value="$(var sim_require_initialpose)" />
+      <param name="hold_after_initialpose_sec" value="$(var sim_initialpose_hold_sec)" />
+      <param name="use_sim_time" value="false" />
+    </node>
+
     <include file="$(find-pkg-share f1tenth_gym_ros)/launch/gym_bridge_launch.py">
       <arg name="map_yaml_path" value="$(var map_path)/$(var map_name).yaml" />
       <arg name="rviz" value="false" />
@@ -61,7 +77,7 @@
       <param name="frenet_odom_topic" value="/car_state/frenet/odom" />
       <param name="local_waypoints_topic" value="/local_waypoints" />
       <param name="drive_topic" value="/drive" />
-      <!-- Match stack_master/config/NUC2/sim_params.yaml and current PP config. -->
+      <!-- Match stack_master/config/SIM/sim_params.yaml and current PP config. -->
       <param name="vehicle_width" value="0.2032" />
       <param name="lf" value="0.15875" />
       <param name="lr" value="0.17145" />
