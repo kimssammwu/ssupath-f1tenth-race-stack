@@ -35,7 +35,7 @@ setup(
         (os.path.join('share', package_name, 'config', 'global_planner', 'veh_dyn_info'), glob(os.path.join('config', 'global_planner', 'veh_dyn_info', '*.csv'))),
         *map_subfolders,
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
     maintainer='ForzaETH',
     maintainer_email='nicolas.baumann@pbl.ee.ethz.ch',
@@ -45,6 +45,7 @@ setup(
     entry_points={
         'console_scripts': [
             'global_parameter_node = stack_master.global_parameter_node:main',
+            'bexco_sim_bridge = stack_master.bexco_sim_bridge:main',
         ],
     },
 )
