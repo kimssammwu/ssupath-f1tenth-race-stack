@@ -13,6 +13,8 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <exec_depend>python3-numpy</exec_depend>
+  <!-- From upstream commit 11134c7e: mouse_estop evdev backend. -->
+  <exec_depend>python3-evdev</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

@@ -6,6 +6,7 @@
   <arg name="rl_param_file" default="$(find-pkg-share rl_controller)/config/rl_controller.yaml"/>
   <arg name="v_max" default="5.0" description="행동->속도 매핑 상한 [m/s]"/>
   <arg name="scan_source" default="cloud" description="cloud(실차 Livox) / laserscan(시뮬)"/>
+  <arg name="ckpt_dir" default="" description="학습 런 폴더로 가중치 선택 (예: 20260822_5768)"/>
   <!-- 체크포인트 경로는 param 파일(config/rl_controller.yaml) 한 곳에서만 관리한다. -->
 
 
@@ -14,5 +15,6 @@
     <!-- type 명시 필수: v_max:=5 처럼 넘기면 "5" 가 int 로 추론된다. -->
     <param name="v_max" value="$(var v_max)" type="float"/>
     <param name="scan_source" value="$(var scan_source)" type="str"/>
+    <param name="ckpt_dir" value="$(var ckpt_dir)" type="str"/>
   </node>
 </launch>

@@ -6,10 +6,12 @@
   <arg name="sim" default="False" description="True/False if you want to run simulation" />
   <arg name="loc_algorithm" default="slam" description="'slam' / 'synpf' to switch localisation algorithm" />
   <arg name="rviz" default="false" description="차에서 rviz2 실행 (초기 포즈 화살표용, 주행 시 false 권장)" />
-  <!-- 로컬 실차 launch와 명령 호환을 위해 유지. 현재 BEXCO simulator에서는 bridge IMU를 사용한다. -->
   <arg name="imu_mode" default="test" description="Compatibility argument for vehicle launch" />
-  <!-- 기본은 map_name과 같은 이름의 PCD. 예: maps/hall/hall.pcd -->
   <arg name="pcd_file" default="$(var map_name).pcd" description="PCD file inside map_dir used as virtual Livox environment" />
+  <arg name="mouse_estop" default="true"
+    description="마우스 우클릭 한 번 = 정지, 다시 한 번 = 재출발 (조이스틱 e-stop 과 같은 래치)" />
+  <arg name="mouse_estop_backend" default="auto"
+    description="auto / evdev(권한 필요, X 없이 동작) / pynput(X11 전역 후킹)" />
 
   <let name="sensors_config" value="$(find-pkg-share stack_master)/config/sensors.yaml" />
   <let name="mux_config" value="$(find-pkg-share stack_master)/config/mux.yaml" />
@@ -22,17 +24,7 @@
   <let name="map_path" value="$(var maps_root)/$(var map_dir)" />
   <let name="pcd_path" value="$(var map_path)/$(var pcd_file)" />
 
-  <!--
-    PC SIL mode
-    -----------
-    Controller/planner/localization are the same nodes used on the vehicle.
-    Only hardware is replaced:
-      /drive -> f1tenth_gym -> GT pose
-      GT pose + static PCD -> /livox/lidar
-      GT odom -> /odom (wheel/vehicle odometry input)
-      simulated IMU -> /sensors/imu/raw
-    GT pose is private to the simulator side and is not used as localization output.
-  -->
+  <!-- PC SIL: planner/controller/localization stay identical; only hardware is replaced. -->
   <group if="$(var sim)">
     <include file="$(find-pkg-share f1tenth_gym_ros)/launch/gym_bridge_launch.py">
       <arg name="map_yaml_path" value="$(var map_path)/$(var map_name).yaml" />
@@ -49,14 +41,12 @@
       <param name="map_voxel_size" value="0.04" />
       <param name="cloud_rate" value="10.0" />
       <param name="range_max" value="30.0" />
-      <!-- localization.launch.py의 base_link -> livox_frame static TF와 동일 -->
       <param name="lidar_x" value="0.27" />
       <param name="lidar_y" value="0.0" />
       <param name="lidar_z" value="0.07" />
       <param name="lidar_yaw" value="1.5707963267948966" />
     </node>
 
-    <!-- 실차와 동일한 3D localization chain을 simulator에서도 실행한다. -->
     <include file="$(find-pkg-share ekf_localizer)/launch/full_localization.launch.xml">
       <arg name="rviz" value="$(var rviz)" />
     </include>
@@ -66,7 +56,7 @@
     </include>
   </group>
 
-  <!-- launch real car system: existing behavior is intentionally unchanged -->
+  <!-- Real car behavior remains unchanged. -->
   <group unless="$(var sim)">
     <include file="/home/misys/forza_ws/race_stack/base_system/f1tenth_system/f1tenth_stack/launch/bringup_3D_launch.py">
       <arg name="joy_teleop_config" value="$(var joy_teleop_config)" />
@@ -76,13 +66,10 @@
     </include>
 
     <include file="/home/misys/forza_ws/race_stack/state_estimation/src/ekf_localizer/launch/full_localization.launch.xml">
-      <arg name="map_name" value="$(var map_name)" />
-      <arg name="frenet_bool" value="True" />
       <arg name="rviz" value="$(var rviz)" />
     </include>
   </group>
 
-  <!-- launch global parameter node -->
   <node pkg="stack_master" name="global_parameters" exec="global_parameter_node">
     <param name="racecar_version" value="$(var racecar_version)" />
     <param name="sim" value="$(var sim)" />
@@ -90,11 +77,18 @@
     <param name="use_sim_time" value="$(var sim)" />
   </node>
 
-  <!-- launch global trajectory republisher -->
   <node pkg="global_planner" name="global_republisher" exec="global_trajectory_publisher">
     <param name="map_path" value="$(var map_path)" />
     <param name="ltpl_origin_widths" value="true" />
     <param name="ltpl_max_widen" value="0.6" />
+  </node>
+
+  <!-- From upstream commit 11134c7e: mouse right-click e-stop toggle. -->
+  <node pkg="stack_master" name="mouse_estop" exec="mouse_estop" output="screen"
+    if="$(var mouse_estop)">
+    <param name="backend" value="$(var mouse_estop_backend)" />
+    <param name="button" value="right" />
+    <param name="debounce_ms" value="250" />
   </node>
 
   <node pkg="sector_tuner" name="sector_tuner" exec="sector_tuner">

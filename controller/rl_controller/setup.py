@@ -5,6 +5,24 @@ from setuptools import setup
 
 package_name = 'rl_controller'
 
+
+def _run_dir_data_files():
+    """models/ 하위 학습 런 폴더를 install 공간에도 넣는다 (launch 인자 ckpt_dir 용).
+
+    최상단의 평평한 *.pt 가 '기본 배포 대상'이라는 규칙은 그대로다. 여기서 추가로
+    까는 것은 런 폴더뿐이고, 그중에서도 **`*_healthy.pt` 만** 깐다 —
+    런 최종 `pow.pt`/`cvar.pt` 는 조향 다양성이 붕괴한 스냅샷이라 배포 대상이
+    아니다(models/README.md). 실수로 고를 수 없게 아예 안 깐다.
+    run_config.json 은 노드가 관측 규약(curv_lookahead/curv_clip)을 자동으로
+    맞추는 데 쓰므로 반드시 같이 깔아야 한다.
+    """
+    out = {}
+    for pat in ('*_healthy.pt', '*.json'):
+        for f in glob(os.path.join('models', '*', '**', pat), recursive=True):
+            out.setdefault(os.path.join('share', package_name, os.path.dirname(f)),
+                           []).append(f)
+    return sorted(out.items())
+
 setup(
     name=package_name,
     version='0.1.0',
@@ -25,7 +43,7 @@ setup(
         (os.path.join('share', package_name, 'models'),
             glob(os.path.join('models', '*.pt')) + glob(os.path.join('models', '*.json'))
             + glob(os.path.join('models', '*.md'))),
-    ],
+    ] + _run_dir_data_files(),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='misys',

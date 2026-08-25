@@ -39,3 +39,32 @@ ros2 launch stack_master head_to_head_launch.xml racecar_version:=<NUCx used> LU
 - `<Look-Up Table name>` is the name of the Look-Up Table you want to use. It must belong to the list of Look-Up Tables available in the `systm_identification/steering_lookup/cfg` folder.
 - `<control algorithm>` is the control algorithm you want to use. Current possibilities are MAP / PP.
 - `<overtake_mode>` is the mode you want to use for overtaking. `spliner` is the only current possibility.
+
+### 정지 / 재출발 (E-STOP)
+조이스틱과 마우스 **둘 중 아무거나** 쓸 수 있고, 같은 래치를 공유한다.
+마우스로 세운 차를 조이스틱으로 풀거나 그 반대도 된다.
+
+| 입력 | 정지 | 재출발 |
+| --- | --- | --- |
+| 마우스 | 우클릭 | 우클릭 (토글) |
+| 조이스틱 (DS4) | Circle (idx 2) | Triangle (idx 3) |
+| 터미널 | 아래 명령의 `data: true` | 아래 명령의 `data: false` |
+
+```shell
+ros2 topic pub --once --keep-alive 1.0 /e_stop std_msgs/msg/Bool "data: true"
+```
+- 메시지 타입에 **앞 슬래시를 붙이면 안 된다** (`/std_msgs/msg/Bool` X → `std_msgs/msg/Bool` O).
+- `--keep-alive` 를 빼면 `--once` 가 0.1 초 만에 죽어서 샘플이 전달 전에 사라지는 일이 있다
+  (실측: 기본값으로 6회 중 1회 누락, `--keep-alive 1.0` 은 6회 중 0회). `-t 3` 도 같은 효과.
+- QoS 는 따로 줄 필요 없다. `ros2 topic pub` 의 `--qos-durability` 기본값이 이미
+  `transient_local` 이라 `/e_stop` 구독과 그대로 맞는다.
+
+- 마우스 노드(`stack_master/mouse_estop`)는 `base_system_*_launch.xml` 이 같이 띄운다.
+  끄려면 `mouse_estop:=false`.
+- 실제 래치는 `mux_controller` 가 들고 있고 `/e_stop_state` 로 알린다. 걸려 있는 동안
+  `/drive` 로 속도 0 과 duty 0 을 계속 내보낸다.
+- 입력 백엔드는 `auto`: `/dev/input/event*` 를 읽을 수 있으면 evdev(포커스/X 불필요),
+  아니면 pynput(X11 전역 후킹, `DISPLAY` 필요). evdev 를 쓰려면
+  `scripts/99-f1tenth-input.rules` 를 `/etc/udev/rules.d/` 에 설치할 것.
+- `/e_stop` 은 transient_local 이라, 마우스로 세워 둔 채 head_to_head 를 재기동하면
+  새 `mux_controller` 도 정지 상태로 뜬다 (우클릭 한 번으로 출발).

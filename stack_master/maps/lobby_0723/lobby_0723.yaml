@@ -1,7 +1,0 @@
-image: lobby_0723.png
-mode: trinary
-resolution: 0.05
-origin: [-8.059192, -6.839774, -1.106334]
-negate: 0
-occupied_thresh: 0.065
-free_thresh: 0.25

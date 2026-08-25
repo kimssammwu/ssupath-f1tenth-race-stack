@@ -61,7 +61,8 @@ def describe_track(tr) -> None:
               + ", ".join(f"{a:.1f}~{b:.1f}" for a, b in spans(hard)))
         print("      -> 중심선을 그대로 못 따라가므로 코리도 폭을 쓰는 라인이 필요하다 "
               "(학습 절차 트랙에도 이런 구간은 있다: 60종 중 33종, 최대 2.5%)")
-    # 20260805 세대부터 곡률 관측 클립이 ±2 다 (offline_sim.CURV_CLIP 와 동일 상수).
+    # 곡률 관측 클립은 실린 체크포인트와 세트다 (offline_sim.CURV_CLIP =
+    # config/rl_controller.yaml 의 curv_clip = run_config.json 의 curv_clip).
     from rl_controller.offline_sim import CURV_CLIP
     clipped = k > CURV_CLIP
     if clipped.any():
@@ -81,6 +82,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     # 상대경로면 패키지의 models/ 기준으로 해석된다 (노드와 동일 규칙).
     ap.add_argument("--checkpoint", default="pow_healthy.pt")
+    ap.add_argument("--ckpt-dir", default="",
+                    help="학습 런 폴더로 가중치 선택 (예: 20260822_5768). launch 인자 "
+                         "ckpt_dir 과 같은 규칙이고, 그 폴더의 run_config.json 에서 "
+                         "관측 규약(curv_lookahead/curv_clip)을 자동으로 맞춘다")
     ap.add_argument("--map", default="", help="stack_master/maps/<name> 폴더")
     ap.add_argument("--bag", default="", help="rosbag2 폴더 (/livox/lidar 포함)")
     ap.add_argument("--z-bands", default="0.02:0.30,0.00:0.35,0.05:0.25",
@@ -91,25 +96,47 @@ def main() -> int:
     ap.add_argument("--rollout-speeds", default="2.0,3.0,5.0")
     ap.add_argument("--rollout-starts", type=int, default=6)
     ap.add_argument("--rollout-seconds", type=float, default=30.0)
-    # 기본은 학습 공칭 마찰(offline_sim.MU_NOM=1.05). 2026-08-18 실차 실측으로 학습
-    # mu_range 가 (0.85,1.25) -> (0.75,1.10) 으로 재수축돼, 공칭 1.05 는 이제 실측
-    # 밴드(실 노면 ~0.85~1.07)의 '상단'이다. 반드시 하단에서도 같이 볼 것.
-    # 예: --mu 0.85 (실측 하단) / --mu 0.75 (학습 밴드 하한). 완주율이 무너지면 위험하다.
+    # ★2026-08-21 기준 변경: 기본 mu 가 offline_sim.MU_NOM = 0.581 (test_0821 실측
+    #   물리 mu 0.54 의 모델 캘리브레이션 값)이다. 구 1.05 는 폐기됐다 — 그 근거였던
+    #   "실 노면 mu 0.85~1.07" 은 2026-08-18 의 간접 추정이었고, 0821 스키드패드
+    #   직접 측정에서 0.54~0.67 로 뒤집혔다.
+    # ★지금 실린 체크포인트(20260818_85110)는 mu_range (0.85,1.10) 에서 학습됐다.
+    #   즉 기본값으로 돌리면 '정책이 자기 학습 세계에서 도는가'가 아니라
+    #   '측정된 실제 노면에서 도는가'를 보는 것이다 — 배포 판단에는 이쪽이 맞다.
+    #   학습 세계 쪽을 같이 보려면 --mu 0.85 / --mu 1.10 으로도 돌릴 것.
+    #   두 결과가 갈리면 그 격차가 곧 sim2real 위험이다.
     ap.add_argument("--mu", type=float, default=None,
-                    help="폐루프 시뮬 지면 마찰 (기본: 학습 공칭값). 낮춰서 sim2real 여유 확인")
+                    help="폐루프 시뮬 지면 마찰 (기본: 실측 캘리브레이션 0.581). "
+                         "실린 체크포인트의 학습 밴드(run_config.json 의 mu_range)로도 "
+                         "돌려 두 결과를 비교할 것")
     args = ap.parse_args()
 
-    from rl_controller.checkpoints import resolve_checkpoint
+    from rl_controller.checkpoints import (load_run_config, resolve_checkpoint,
+                                           resolve_run)
     from rl_controller.policy import DacerPolicy
     from rl_controller.scan_builder import PseudoScanBuilder
     from rl_controller.track_reference import TrackReference
 
-    ckpt = resolve_checkpoint(args.checkpoint)
+    ckpt = (resolve_run(args.ckpt_dir, args.checkpoint) if args.ckpt_dir
+            else resolve_checkpoint(args.checkpoint))
     print("=" * 72)
     print(f"[1] 체크포인트: {ckpt}")
     if not os.path.isfile(ckpt):
         print("    ! 파일이 없습니다")
         return 1
+    # 관측 규약을 학습 기록에 맞춘다 (노드가 하는 것과 같은 일).
+    run_cfg = load_run_config(ckpt)
+    if run_cfg:
+        from rl_controller.offline_sim import set_obs_contract
+        off, clip = set_obs_contract(run_cfg.get("curv_lookahead"), run_cfg.get("curv_clip"))
+        mu_band = run_cfg.get("mu_range")
+        print(f"    학습 규약: curv_lookahead={list(off)} curv_clip={clip} "
+              f"obs_dim={run_cfg.get('obs_dim')} mu_range={mu_band}")
+        if mu_band:
+            print(f"    ※ 배포 yaml 의 curv_lookahead/curv_clip 도 이 값이어야 한다")
+    else:
+        print("    ! run_config.json 이 없어 관측 규약을 확인하지 못했습니다 "
+              "(curv_clip 이 틀리면 조용히 틀립니다)")
     t0 = time.perf_counter()
     pol = DacerPolicy.load(ckpt, device="cpu")
     print(f"    obs_dim={pol.obs_dim} act_dim={pol.act_dim} "
@@ -144,8 +171,9 @@ def main() -> int:
             from rl_controller.offline_sim import MU_NOM, evaluate
             mu = MU_NOM if args.mu is None else args.mu
             print("    ---- 폐루프 시뮬 (학습 타이어 모델, 실차 사고를 재현하는 유일한 검사) ----")
-            print(f"    지면 마찰 mu={mu:.2f}"
-                  + ("  (학습 공칭값)" if args.mu is None else f"  (학습 공칭 {MU_NOM:.2f} 대비 낮춤)"))
+            print(f"    지면 마찰 mu={mu:.3f}"
+                  + ("  (2026-08-21 실측 캘리브레이션값 = 실제 노면)" if args.mu is None
+                     else f"  (실측 캘리브레이션 {MU_NOM:.3f} 대비 지정)"))
             vs = [float(v) for v in args.rollout_speeds.split(",")]
             res = evaluate(tr, pol, v_max_list=vs, starts=args.rollout_starts,
                            seconds=args.rollout_seconds, mu=mu, log=lambda m: print(m))

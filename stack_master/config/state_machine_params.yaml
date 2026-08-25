@@ -40,7 +40,7 @@ state_machine:
     #   감속이 여전히 잦으면 0.25 까지는 내려도 이 백 기준 안전 손실이 없다.
     #
     # ※ 같은 값이 _check_recover_path_free(후진 전 후방 장애물 검사)에도 쓰인다.
-    lateral_width_gb_m: 0.20 # -> NOW DYNAMIC RECONFIGURABLE
+    lateral_width_gb_m: 0.20 # -> NOW DYNAMIC RECONFIGURABLE #레이스라인으로부터 감속하는 횡폭
     # TRAILING(=감속) 진입 거리.
     # ★ 2026-08-04: 10.0 으로 올렸다가 원복. 이 값을 올려도 소용이 없다 —
     #   퍼셉션의 진짜 상한은 passthrough_filter_node.param.yaml 의 크롭 박스
@@ -173,7 +173,7 @@ state_machine:
     # ※ 놓친 1건은 문턱 문제가 아니다 — NDT 위치가 정지 상태에서 1.84 m 튄 구간이라
     #   '움직였다' 로 읽혔다(VESC 휠 오도메트리는 같은 구간 변위 0.00 m). 자세한 내용은
     #   state_machine.py 의 정지 복구 섹션 주석 참고.
-    recover_stall_time_sec: 1.5    # [s] 판정 윈도우 = 그대로 후진까지의 지연이다
+    recover_stall_time_sec: 1.0    # [s] 판정 윈도우 = 그대로 후진까지의 지연이다
 
     # 위 윈도우 동안 이만큼도 못 갔으면 '못 가고 있다' 로 본다.
     # 1.5 s 에 0.10 m = 평균 0.067 m/s. 라이다/NDT 위치 노이즈(수 cm)보다 충분히 크고,
