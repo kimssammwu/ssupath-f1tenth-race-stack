@@ -28,6 +28,7 @@
   <group if="$(var sim)">
     <include file="$(find-pkg-share f1tenth_gym_ros)/launch/gym_bridge_launch.py">
       <arg name="map_yaml_path" value="$(var map_path)/$(var map_name).yaml" />
+      <arg name="rviz" value="false" />
     </include>
 
     <node pkg="stack_master" name="bexco_sim_bridge" exec="bexco_sim_bridge" output="screen">
@@ -45,10 +46,12 @@
       <param name="lidar_y" value="0.0" />
       <param name="lidar_z" value="0.07" />
       <param name="lidar_yaw" value="1.5707963267948966" />
+      <param name="use_sim_time" value="false" />
     </node>
 
     <include file="$(find-pkg-share ekf_localizer)/launch/full_localization.launch.xml">
       <arg name="rviz" value="$(var rviz)" />
+      <arg name="map_path" value="$(var pcd_path)" />
     </include>
 
     <include file="$(find-pkg-share frenet_odom_republisher)/launch/frenet_odom_republisher_launch.xml">
@@ -74,7 +77,8 @@
     <param name="racecar_version" value="$(var racecar_version)" />
     <param name="sim" value="$(var sim)" />
     <param name="map_path" value="$(var map_path)" />
-    <param name="use_sim_time" value="$(var sim)" />
+    <!-- f1tenth_gym in this repository does not publish /clock; keep one wall-clock domain. -->
+    <param name="use_sim_time" value="false" />
   </node>
 
   <node pkg="global_planner" name="global_republisher" exec="global_trajectory_publisher">
