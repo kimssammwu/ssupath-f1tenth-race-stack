@@ -47,6 +47,7 @@ setup(
             'mouse_estop = stack_master.mouse_estop_node:main',
             'bexco_sim_bridge = stack_master.bexco_sim_bridge:main',
             'sim_drive_diagnostics = stack_master.sim_drive_diagnostics:main',
+            'sim_initialpose_drive_gate = stack_master.sim_initialpose_drive_gate:main',
         ],
     },
 )
