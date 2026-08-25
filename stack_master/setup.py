@@ -46,6 +46,7 @@ setup(
             'global_parameter_node = stack_master.global_parameter_node:main',
             'mouse_estop = stack_master.mouse_estop_node:main',
             'bexco_sim_bridge = stack_master.bexco_sim_bridge:main',
+            'sim_drive_diagnostics = stack_master.sim_drive_diagnostics:main',
         ],
     },
 )
