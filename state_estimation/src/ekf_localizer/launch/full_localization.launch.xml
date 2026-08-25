@@ -1,10 +1,13 @@
 <launch>
-	<arg name="rviz" default="false" description="차에서 rviz2 실행 여부 (초기 포즈용)" />
-	<include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
-	<include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml" />
-	<include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer.launch.xml" />
-	<include file="$(find-pkg-share lidarslam)/launch/localization.launch.py">
-		<arg name="rviz" value="$(var rviz)" />
-	</include>
-	<include file="$(find-pkg-share carstate_3d)/launch/carstate_3d_launch.py"/>
-</launch>	
+  <arg name="rviz" default="false" description="차에서 rviz2 실행 여부 (초기 포즈용)" />
+  <arg name="map_path" default="/home/misys/forza_ws/race_stack/map.pcd" description="Localization target PCD path" />
+
+  <include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml" />
+  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer.launch.xml" />
+  <include file="$(find-pkg-share lidarslam)/launch/localization.launch.py">
+    <arg name="rviz" value="$(var rviz)" />
+    <arg name="map_path" value="$(var map_path)" />
+  </include>
+  <include file="$(find-pkg-share carstate_3d)/launch/carstate_3d_launch.py"/>
+</launch>
