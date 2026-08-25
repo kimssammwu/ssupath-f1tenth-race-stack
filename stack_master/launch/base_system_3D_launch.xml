@@ -8,6 +8,8 @@
   <arg name="rviz" default="false" description="차에서 rviz2 실행 (초기 포즈 화살표용, 주행 시 false 권장)" />
   <arg name="imu_mode" default="test" description="Compatibility argument for vehicle launch" />
   <arg name="pcd_file" default="$(var map_name).pcd" description="PCD file inside map_dir used as virtual Livox environment" />
+  <arg name="sim_diagnostics" default="true"
+    description="Simulation only: publish collision/PP/localization diagnostic topics" />
   <arg name="mouse_estop" default="true"
     description="마우스 우클릭 한 번 = 정지, 다시 한 번 = 재출발 (조이스틱 e-stop 과 같은 래치)" />
   <arg name="mouse_estop_backend" default="auto"
@@ -46,6 +48,31 @@
       <param name="lidar_y" value="0.0" />
       <param name="lidar_z" value="0.07" />
       <param name="lidar_yaw" value="1.5707963267948966" />
+      <param name="use_sim_time" value="false" />
+    </node>
+
+    <!-- Observation-only monitor. It never modifies /drive. -->
+    <node pkg="stack_master" name="sim_drive_diagnostics" exec="sim_drive_diagnostics"
+      output="screen" if="$(var sim_diagnostics)">
+      <param name="scan_topic" value="/scan" />
+      <param name="gt_odom_topic" value="/car_state/odom_GT" />
+      <param name="est_pose_topic" value="/car_state/pose" />
+      <param name="est_odom_topic" value="/car_state/odom" />
+      <param name="frenet_odom_topic" value="/car_state/frenet/odom" />
+      <param name="local_waypoints_topic" value="/local_waypoints" />
+      <param name="drive_topic" value="/drive" />
+      <!-- Match stack_master/config/NUC2/sim_params.yaml and current PP config. -->
+      <param name="vehicle_width" value="0.2032" />
+      <param name="lf" value="0.15875" />
+      <param name="lr" value="0.17145" />
+      <param name="gym_collision_ttc" value="0.005" />
+      <param name="collision_warning_ttc" value="0.15" />
+      <param name="pp_m_l1" value="0.32" />
+      <param name="pp_q_l1" value="0.25" />
+      <param name="pp_t_clip_min" value="0.1" />
+      <param name="pp_t_clip_max" value="6.0" />
+      <param name="waypoint_spacing" value="0.1" />
+      <param name="publish_rate_hz" value="40.0" />
       <param name="use_sim_time" value="false" />
     </node>
 
