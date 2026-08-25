@@ -21,6 +21,12 @@ mux_controller:
     start_hold_button_idx: 1
     start_hold_servo_position: 0.5
 
+    # 외부 e-stop 토픽 (stack_master 의 mouse_estop 노드 = 마우스 우클릭 토글).
+    # 조이스틱 e-stop 과 같은 래치를 공유하므로 마우스로 세우고 조이스틱으로 풀 수 있다.
+    # joy_estop_enabled: false 로 두어도 이 토픽은 계속 동작한다 (버튼만 꺼진다).
+    estop_topic: "/e_stop"
+    estop_state_topic: "/e_stop_state"
+
     # AUTO -> JOY 전환 시 정지 펄스 시간 [ms]
     joy_stop_dwell_ms: 300
 

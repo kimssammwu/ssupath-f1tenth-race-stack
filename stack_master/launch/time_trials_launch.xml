@@ -6,6 +6,11 @@
     <!-- RL(강화학습 정책) 전용: 행동 -> 속도 매핑 상한 [m/s]. 다른 ctrl_algo 에서는 무시된다. -->
     <arg name="v_max" default="5.0" />
     <arg name="rl_scan_source" default="cloud" /> <!-- cloud(실차 Livox) / laserscan(시뮬) -->
+    <!-- RL 전용: 학습 런 폴더로 가중치 선택 (예: ckpt_dir:=20260822_5768).
+         비우면 rl_controller.yaml 의 checkpoint(pow_healthy.pt)를 쓴다. -->
+    <arg name="ckpt_dir" default="" />
+    <!-- 시뮬 검증용. 실차는 false. -->
+    <arg name="use_sim_time" default="false" />
 
 
     <!-- launch state machine -->
@@ -23,6 +28,8 @@
         <arg name="racecar_version" value="$(var racecar_version)"/>
         <arg name="v_max" value="$(var v_max)"/>
         <arg name="rl_scan_source" value="$(var rl_scan_source)"/>
+        <arg name="ckpt_dir" value="$(var ckpt_dir)"/>
+        <arg name="use_sim_time" value="$(var use_sim_time)"/>
     </include>
 
 </launch>

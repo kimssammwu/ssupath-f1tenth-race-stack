@@ -38,6 +38,7 @@
     <arg name="ctrl_algo" default="RL" />
     <arg name="v_max" default="5.0" /> <!-- 행동 -> 속도 매핑 상한 [m/s] -->
     <arg name="rl_scan_source" default="cloud" /> <!-- cloud(실차 Livox) / laserscan(시뮬) -->
+    <arg name="ckpt_dir" default="" /> <!-- 학습 런 폴더로 가중치 선택 (예: 20260822_5768) -->
     <!-- 인지 체인을 띄울지. false 면 time_trials_launch.xml 과 동일하게 동작한다
          (상대차 관측은 자동으로 0 = 미검출). -->
     <arg name="perception" default="true" />
@@ -65,6 +66,7 @@
         <arg name="v_max" value="$(var v_max)"/>
         <arg name="rl_scan_source" value="$(var rl_scan_source)"/>
         <arg name="rl_opponent" value="$(var opponent)"/>
+        <arg name="ckpt_dir" value="$(var ckpt_dir)"/>
     </include>
 
 </launch>

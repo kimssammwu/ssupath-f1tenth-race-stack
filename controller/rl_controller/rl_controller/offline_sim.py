@@ -31,40 +31,81 @@ import numpy as np
 #
 # 공칭 마찰. 학습 TireModelCfg.mu 와 같은 값을 쓴다 — 이 값이 학습과 다르면
 # "정책이 자기 세계에서 도는가"라는 질문 자체가 성립하지 않는다.
-# 이력: 0.75 -> 0.90(2026-08-07) -> 1.05(2026-08-09). 실차가 코너에서 바깥벽에
-# 붙는 과보수 주행을 그립 부족 인식으로 보고 학습 그립을 올린 실험이다.
-# ★ 학습 mu_range 는 2026-08-18 실차 실측으로 재수축됐다 ((0.85,1.25) -> (0.75,1.10),
-#   중앙 0.925). 실측 근거는 두 독립 경로가 일치: 횡가속 p99 7.92m/s^2 -> mu>=0.81,
-#   지속가속 6.08m/s^2 를 이 모델이 내려면 mu=0.98. 즉 실 노면 mu ~= 0.85~1.07.
-#   TireModelCfg.mu(공칭)는 1.05 그대로라 여기도 1.05 를 유지하지만, 이제 그 값은
-#   실측 밴드의 '상단'이다 -> check_rl_setup.py --mu 0.85 (하단)로도 반드시 돌려 볼 것.
-MU_NOM, ALPHA_CHAR = 1.05, 0.08
+# 이력: 0.75 -> 0.90(2026-08-07) -> 1.05(2026-08-09) -> 0.581(2026-08-21).
+# ★★2026-08-21 동기화 (학습 레포 @3fc77db "fix: physics parameters").
+#   test_0821 실차 실측으로 마찰/구동/제동/구름저항이 전부 바뀌었고, 구동계가
+#   RWD 가 아니라 4WD 임이 확인됐다. 아래 상수는 그 커밋의 TireModelCfg 그대로다.
+#   - 물리 실측 mu = 0.54 (a_lat_max/g). 다만 이 모델은 앞뒤 alpha_char 가 달라
+#     두 축이 동시에 완전포화하지 못해 a_lat_max 가 mu*g 의 92.9% 밖에 안 나온다.
+#     그래서 학습은 '천장'을 실측(5.3 m/s^2)에 맞춘 캘리브레이션 mu 를 쓴다:
+#         mu_cal = 5.3 / (0.929 * 9.81) = 0.581
+#   - 실측 mu 는 하루 안에도 크게 움직인다(0821 02시 0.66~0.67 / 06시 0.54).
+#     학습 밴드는 mu_range=(0.58, 0.72) = 물리 0.54~0.67 을 /0.929 한 것.
+# ★ 지금 실린 체크포인트(20260818_85110)는 **구 물리 + mu_range (0.85,1.10)** 에서
+#   학습됐다. 즉 이 검증기를 기본값(0.581)으로 돌리면 '학습 세계'가 아니라
+#   '측정된 실제 노면'에서 도는지를 보는 것이 된다 — 그게 지금 알아야 할 값이다.
+#   학습 세계 쪽을 보려면 check_rl_setup.py --mu 0.85 ~ 1.10 으로 돌릴 것.
+MU_NOM = 0.581
+# 앞/뒤 특성 슬립각 분리 (2026-08-21 실차 원형스윕 7런 회귀). 같은 값을 쓰면 정상상태
+# 요모멘트 평형에서 alpha_f = alpha_r 이 되어 언더스티어가 정확히 0 인 차가 된다 —
+# 실차는 강한 언더스티어다. (ac_f - ac_r) = 0.086 rad 가 견고하게 식별된 값이고,
+# 절대값은 mu 0.54 와 한 세트로만 의미가 있다.
+ALPHA_CHAR_F, ALPHA_CHAR_R = 0.119, 0.033
 # 코너웨이트 실측(2026-08-18, 배터리 장착 주행 상태): 총 4987g, 앞 2408(48.3%) / 뒤 2579(51.7%).
 # lf = L x 뒤축하중비, lr = L x 앞축하중비 -> CoM 이 축거 중앙보다 5.7mm 뒤다(구 값은 앞).
 MASS, COM_H, LF, LR = 4.987, 0.07, 0.171, 0.159
-# 구동력 실측(2026-08-18 bag loc_debug_0817_2326): 지속가속 p50 6.08m/s^2 @2~5m/s ->
-#   F = m*(a + c_roll*g) = 4.987*(6.08+0.147) = 31.1N.
-# ★제동은 구동과 분리한다(학습 racing_env 도 2026-08-18 에 분리). 실측 제동은 구동의
-#   절반(지속 ~3.0m/s^2) — VESC 속도서보가 강한 역토크를 안 건다. 대칭 clamp 를 쓰면
-#   검증기가 실차의 2배로 서서 '늦게 밟아도 되는' 오판을 준다.
-#   F = m*(a - c_roll*g) = 4.987*(3.00-0.147) = 14.2N (구름저항이 제동을 돕는다).
-K_DRIVE, F_DRIVE_MAX, F_BRAKE_MAX = 40.0, 31.1, 14.2
-C_ROLL, V_LAT_TAPER = 0.015, 0.3
+# ---- 종방향 (2026-08-21 실측, 학습 @3fc77db 와 동일) ----
+# K_DRIVE: step 런 29계단에서 tau = m/k = 0.311s 로 식별 -> k = 4.987/0.312 = 16.0.
+#   구 40.0 은 tau 0.125s 로 실차보다 2.5배 빨리 명령속도에 붙었다. 선형구간 폭이
+#   f_drive_max/k = 0.78 -> 3.4 m/s 로 넓어져 일상 주행 대부분이 포화가 아니게 된다.
+# F_DRIVE_MAX: 실측 가속은 마찰 한계라 분리 식별이 안 됐다(>=35N 만 확인). 4WD
+#   마찰서클에서 종방향 캡이 mu*m*g 이므로, 힘 상한이 먼저 걸리지 않도록 '비구속'
+#   으로 크게 둔다(55N). 즉 가감속을 정하는 것은 mu 다.
+# F_BRAKE_MAX: 실측 제동 6.40 m/s^2 (accel 런 2개 0.4% 일치) ->
+#   F = m*(a - c_roll*g) = 4.987*(6.40-1.02) = 26.8N.
+#   구 14.2 의 근거였던 "실차 제동은 구동의 절반"은 '정책이 실제로 쓴 제동'이었지
+#   '가능한 최대 제동'이 아니었다. 실측은 제동 6.40 vs 가속 5.6~6.3 으로 거의 같다.
+K_DRIVE, F_DRIVE_MAX, F_BRAKE_MAX = 16.0, 55.0, 26.8
+# C_ROLL: 코스트 감속이 3.2->0.1 m/s 전 구간 1.03 m/s^2 로 일정(= 순수 쿨롱 마찰,
+#   모터 전류 p50 0.00A). 2런 편차 0.3% 로 이번 측정 중 신뢰도가 가장 높다.
+#   상시 5.1N = f_drive_max 의 16%. 구 0.015 는 사실상 무저항이라 검증기 차가
+#   타력으로 계속 굴렀는데 실차는 금방 선다.
+C_ROLL, V_LAT_TAPER = 0.104, 0.3
 # Izz: f1tenth.urdf 링크 관성 합(base 0.083920 + 바퀴/너클 평행축), CoM(x=-0.006) 기준.
 IZZ, G = 0.1064, 9.81
 MAX_STEER, STEER_LIMIT, STEER_K, STEER_VLIM = 0.42, 0.44, 10.0, 20.0
+# 명령 -> 실제 조향각 배율 (학습 RacingCfg.steer_gain). 실차는 2026-08-21 실측에서
+# 명령보다 12% 크게 꺾였는데(k 중앙값 1.123), 학습은 그것을 시뮬에 넣는 대신 실차
+# vesc.yaml 의 steering_angle_to_servo_gain 을 -0.65 -> -0.58 로 고쳐 '명령 = 실제'
+# 로 만드는 쪽을 택했다. ★둘 중 하나만 적용한다 — 실차 게인을 되돌리면 여기도 1.12.
+STEER_GAIN = 1.0
 PHYS_DT, DECIMATION = 1.0 / 120.0, 4
 CTRL_DT = PHYS_DT * DECIMATION
 N_BEAMS, FOV, RMAX = 32, 2.356, 10.0
 HW_REF, OBS_VMAX, V_MIN = 2.5, 10.0, 1.0
-# ★ 이 두 개는 '관측 포맷'이라 **지금 실린 체크포인트**와 반드시 세트여야 한다.
-#   2026-08-19: obs_dim=60 세대(20260818_* 런)로 올렸다 — 전방 예견에 120(18m)이
-#   추가되고(58->60) 곡률 클립이 ±3 으로 넓어졌다. run_config.json 의
-#   curv_lookahead / curv_clip 과 일치한다. config/rl_controller.yaml 도 같은 값.
-#   ★ 구 obs_dim=58 체크포인트를 다시 실으려면 (5,15,30,60,90) / 2.0 으로 되돌릴 것.
+# ★ 이 셋은 '관측 포맷'이라 **검증하려는 체크포인트**와 반드시 세트여야 한다.
+#   기본값은 obs_dim=60 세대(20260818_*/20260820_* 런)다.
+#   0821 물리로 재학습한 20260822_* 런은 다시 obs_dim=58 (5점, 120 제거) 이므로,
+#   체크포인트를 바꿔 검증할 때는 손으로 고치지 말고 set_obs_contract() 를 쓸 것 —
+#   check_rl_setup.py 가 run_config.json 을 읽어 자동으로 호출한다.
 CURV_OFF = (5, 15, 30, 60, 90, 120)
 WIDTH_OFF = (0,) + CURV_OFF
 CURV_CLIP = 3.0
+
+
+def set_obs_contract(curv_off=None, curv_clip=None):
+    """관측 규약을 체크포인트의 run_config.json 값으로 맞춘다.
+
+    curv_clip 은 차원을 안 바꾸므로 틀려도 아무 검사에 안 걸린다 — 검증기가
+    학습과 다른 클립으로 돌면 '왜 실차에서만 안 되지'를 영원히 못 찾는다.
+    """
+    global CURV_OFF, WIDTH_OFF, CURV_CLIP
+    if curv_off is not None:
+        CURV_OFF = tuple(int(v) for v in curv_off)
+        WIDTH_OFF = (0,) + CURV_OFF
+    if curv_clip is not None:
+        CURV_CLIP = float(curv_clip)
+    return CURV_OFF, CURV_CLIP
 OFFTRACK_MARGIN, SPIN_HERR = -0.20, 1.745
 ANGLES = np.linspace(-FOV, FOV, N_BEAMS)
 
@@ -82,7 +123,7 @@ class CarSim:
         return math.hypot(self.vx, self.vy)
 
     def step(self, act, v_cmd_max):
-        delta_cmd = float(np.clip(act[0], -1, 1)) * MAX_STEER
+        delta_cmd = float(np.clip(act[0], -1, 1)) * MAX_STEER * STEER_GAIN
         v_cmd = V_MIN + (float(np.clip(act[1], -1, 1)) + 1.0) * 0.5 * (v_cmd_max - V_MIN)
         for _ in range(DECIMATION):
             self._substep(delta_cmd, v_cmd)
@@ -100,18 +141,30 @@ class CarSim:
 
         vx_eff = max(abs(vx), 0.5)
         taper = math.tanh(abs(vx) / V_LAT_TAPER)
+        # 앞/뒤 특성 슬립각 분리 (2026-08-21) — 같은 값이면 언더스티어가 0 인 차가 된다.
         fyf = -self.mu * nf * math.tanh((math.atan2(vy + LF * r, vx_eff) - delta)
-                                        / ALPHA_CHAR) * taper
-        fyr = -self.mu * nr * math.tanh(math.atan2(vy - LR * r, vx_eff) / ALPHA_CHAR) * taper
+                                        / ALPHA_CHAR_F) * taper
+        fyr = -self.mu * nr * math.tanh(math.atan2(vy - LR * r, vx_eff) / ALPHA_CHAR_R) * taper
 
-        scale_r = min(self.mu * nr / max(math.hypot(fx_des, fyr), 1e-6), 1.0)
-        fx_r, fyr = fx_des * scale_r, fyr * scale_r
+        # ---- 4WD 축별 마찰서클 (2026-08-21, 섀시 4WD 확인) ----
+        # 구 코드는 뒤축에만 걸었다(RWD 가정) -> 종방향 캡이 mu*N_r 뿐이라 정지가속이
+        # 실측의 절반이었다. 구동력을 축하중 비례로 나눠 축별로 걸면 종방향 합 캡이
+        # mu*m*g 가 되고(실측 일치), 횡력 잠식은 축별로 유지된다.
+        n_tot = max(nf + nr, 1e-6)
+        fx_f_des, fx_r_des = fx_des * nf / n_tot, fx_des * nr / n_tot
+        scale_f = min(self.mu * nf / max(math.hypot(fx_f_des, fyf), 1e-6), 1.0)
+        scale_r = min(self.mu * nr / max(math.hypot(fx_r_des, fyr), 1e-6), 1.0)
+        fx_f, fyf = fx_f_des * scale_f, fyf * scale_f
+        fx_r, fyr = fx_r_des * scale_r, fyr * scale_r
+
         f_roll = -C_ROLL * MASS * G * math.tanh(vx / 0.2)
         cd, sd = math.cos(delta), math.sin(delta)
-
-        self.vx += ((fx_r + f_roll - fyf * sd) / MASS + vy * r) * PHYS_DT
-        self.vy += ((fyr + fyf * cd) / MASS - vx * r) * PHYS_DT
-        self.r += ((LF * fyf * cd - LR * fyr) / IZZ) * PHYS_DT
+        # 앞축 힘(종/횡)을 조향각만큼 차체 프레임으로 회전. 4WD 라 종방향 성분 fx_f 가
+        # 생겼으므로 요모멘트에도 그 기여(LF * fx_f*sd)가 들어간다.
+        fy_front_b = fx_f * sd + fyf * cd
+        self.vx += ((fx_f * cd - fyf * sd + fx_r + f_roll) / MASS + vy * r) * PHYS_DT
+        self.vy += ((fy_front_b + fyr) / MASS - vx * r) * PHYS_DT
+        self.r += ((LF * fy_front_b - LR * fyr) / IZZ) * PHYS_DT
         self.yaw += self.r * PHYS_DT
         cy, sy = math.cos(self.yaw), math.sin(self.yaw)
         self.x += (self.vx * cy - self.vy * sy) * PHYS_DT

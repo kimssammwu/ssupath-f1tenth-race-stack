@@ -4,7 +4,7 @@ l1_controller:
     t_clip_max: 6.0
     # m_l1: 0.583
     # q_l1: -0.167
-    m_l1: 0.3 #기존 0.4 
+    m_l1: 0.32 #기존 0.4 
     # 0715 위빙(1.8Hz 조향 진동) 완화: lookahead 연장으로 루프 이득 저감 (0.4 -> 0.7)
     q_l1: 0.25   #기존 0.3
     speed_lookahead: 0.0

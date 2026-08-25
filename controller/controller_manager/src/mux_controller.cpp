@@ -9,6 +9,7 @@
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 // 커스텀 메시지
 #include "mpcc_ros/msg/mpcc_control.hpp"              // duty_cycle, servo, solver_status
@@ -26,6 +27,11 @@ public:
     joy_estop_enabled_ = this->declare_parameter<bool>("joy_estop_enabled", true);
     joy_estop_button_idx_ = this->declare_parameter<int>("joy_estop_button_idx", 2);
     joy_estop_release_button_idx_ = this->declare_parameter<int>("joy_estop_release_button_idx", 3);
+
+    // 외부 e-stop 토픽 (마우스 우클릭 토글 노드 stack_master/mouse_estop 등).
+    // 조이스틱 e-stop 과 **같은 래치**를 공유하므로 둘 중 아무거나로 세우고 풀 수 있다.
+    estop_topic_ = this->declare_parameter<std::string>("estop_topic", "/e_stop");
+    estop_state_topic_ = this->declare_parameter<std::string>("estop_state_topic", "/e_stop_state");
     start_hold_enabled_ = this->declare_parameter<bool>("start_hold_enabled", true);
     start_hold_button_idx_ = this->declare_parameter<int>("start_hold_button_idx", 1);
     start_hold_servo_position_ = this->declare_parameter<double>("start_hold_servo_position", 0.5);
@@ -48,6 +54,11 @@ public:
     servo_pub_ = this->create_publisher<std_msgs::msg::Float64>("/commands/servo/position", 1);
     drive_pub_ = this->create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/drive", 1);
 
+    // e-stop 은 놓치면 안 되고, 늦게 뜬 노드(마우스 노드/GUI)도 현재 값을 받아야 하므로
+    // reliable + transient_local. 발행/구독 양쪽 프로필이 같아야 래치가 전달된다.
+    const auto estop_qos = rclcpp::QoS(1).reliable().transient_local();
+    estop_state_pub_ = this->create_publisher<std_msgs::msg::Bool>(estop_state_topic_, estop_qos);
+
     // ---- 서브스크립션 ----
     mpcc_sub_ = this->create_subscription<mpcc_ros::msg::MpccControl>(
       "/mpcc/control", rclcpp::QoS(1),
@@ -60,6 +71,13 @@ public:
     joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
       "/joy", rclcpp::QoS(1),
       std::bind(&TopController::on_joy, this, std::placeholders::_1));
+
+    // 외부 e-stop: true=정지 래치, false=해제. 마우스 노드가 우클릭마다 반대값을 낸다.
+    estop_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+      estop_topic_, estop_qos,
+      [this](const std_msgs::msg::Bool::SharedPtr msg){
+        set_estop(msg->data, "external");
+      });
 
     state_sub_ = this->create_subscription<std_msgs::msg::String>(
       "/state", rclcpp::QoS(1),
@@ -83,6 +101,13 @@ public:
       joy_estop_release_button_idx_,
       start_hold_enabled_ ? "on" : "off",
       start_hold_button_idx_);
+
+    // 현재 래치 상태를 한 번 알린다 (transient_local 이라 나중에 뜨는 노드도 받는다).
+    publish_estop_state();
+    RCLCPP_INFO(
+      get_logger(),
+      "External e-stop: sub=%s state=%s (마우스 우클릭 토글과 공유하는 래치)",
+      estop_topic_.c_str(), estop_state_topic_.c_str());
   }
 
 private:
@@ -145,21 +170,34 @@ private:
     const bool stop_edge = is_rising_edge(buttons, joy_estop_button_idx_);
     const bool release_edge = is_rising_edge(buttons, joy_estop_release_button_idx_);
 
-    if (!joy_estop_latched_ && stop_edge) {
-      joy_estop_latched_ = true;
+    if (!estop_latched_ && stop_edge) {
+      set_estop(true, "joystick");
+    } else if (estop_latched_ && release_edge) {
+      set_estop(false, "joystick");
+    }
+  }
+
+  // 조이스틱/마우스/외부 토픽이 공유하는 단일 래치.
+  // 한쪽에서 세운 걸 다른 쪽에서 풀 수 있어야 해서 상태를 여기 한 곳에만 둔다.
+  void set_estop(bool latched, const char* source) {
+    if (latched == estop_latched_) return;
+    estop_latched_ = latched;
+    if (estop_latched_) {
       publish_estop_stop();
       RCLCPP_ERROR(
         get_logger(),
-        "JOYSTICK E-STOP latched (button idx=%d). Press release button idx=%d to resume.",
-        joy_estop_button_idx_,
-        joy_estop_release_button_idx_);
-    } else if (joy_estop_latched_ && release_edge) {
-      joy_estop_latched_ = false;
-      RCLCPP_WARN(
-        get_logger(),
-        "Joystick e-stop released (button idx=%d).",
-        joy_estop_release_button_idx_);
+        "E-STOP latched (source=%s). 해제: 조이스틱 idx=%d 또는 마우스 우클릭.",
+        source, joy_estop_release_button_idx_);
+    } else {
+      RCLCPP_WARN(get_logger(), "E-STOP released (source=%s) -> AUTO 재개.", source);
     }
+    publish_estop_state();
+  }
+
+  void publish_estop_state() {
+    std_msgs::msg::Bool msg;
+    msg.data = estop_latched_;
+    estop_state_pub_->publish(msg);
   }
 
   void handle_start_hold(const std::vector<int>& buttons) {
@@ -187,9 +225,10 @@ private:
 
   // ---- 메인 루프 ----
   void loop() {
-    if (joy_estop_enabled_ && joy_estop_latched_) {
+    // joy_estop_enabled_ 는 조이스틱 '버튼'만 막는다. 래치가 걸려 있으면 출처와 무관하게 정지.
+    if (estop_latched_) {
       publish_estop_stop();
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "JOYSTICK E-STOP active.");
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "E-STOP active (정지 유지 중).");
       return;
     }
 
@@ -306,6 +345,8 @@ private:
   bool joy_estop_enabled_{true};
   int joy_estop_button_idx_{2};
   int joy_estop_release_button_idx_{3};
+  std::string estop_topic_{"/e_stop"};
+  std::string estop_state_topic_{"/e_stop_state"};
   bool start_hold_enabled_{true};
   int start_hold_button_idx_{1};
   double start_hold_servo_position_{0.5};
@@ -316,19 +357,21 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr duty_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr servo_pub_;
   rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr estop_state_pub_;
 
   // ---- 서브스크립션 ----
   rclcpp::Subscription<mpcc_ros::msg::MpccControl>::SharedPtr mpcc_sub_;
   rclcpp::Subscription<f110_msgs::msg::L1controllerControl>::SharedPtr l1_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_; 
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr estop_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // ---- 상태 ----
   std::optional<mpcc_ros::msg::MpccControl> last_mpcc_;
   std::optional<f110_msgs::msg::L1controllerControl> last_l1_;
   std::optional<std::vector<int>> last_buttons_;
-  bool joy_estop_latched_{false};
+  bool estop_latched_{false};   // 조이스틱/마우스/외부 토픽 공유 래치
   bool start_hold_pressed_{false};
   std::string state_; 
 

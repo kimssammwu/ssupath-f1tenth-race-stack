@@ -9,6 +9,9 @@
 
   <exec_depend>ros2launch</exec_depend>
   <depend>rclpy</depend>
+  <!-- mouse_estop 노드의 evdev 백엔드용. 없으면 pynput(X11) 로 자동 폴백한다
+       (pynput 은 rosdep 키가 없어 pip3 install pynput 로 따로 깔아야 한다). -->
+  <exec_depend>python3-evdev</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

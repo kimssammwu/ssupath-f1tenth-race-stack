@@ -1,0 +1,19 @@
+# mouse_estop 노드가 /dev/input/event* 를 직접 읽게 해주는 udev 룰 (evdev 백엔드용).
+#
+# 기본값(root:input 0660)에서는 일반 사용자가 마우스 이벤트를 못 읽어서
+# mouse_estop 이 pynput(X11) 백엔드로 넘어간다. pynput 은 DISPLAY 가 있어야 하고
+# X 가 죽으면 같이 죽으므로, 주행용으로는 evdev 쪽이 더 튼튼하다.
+#
+# 설치:
+#   sudo cp stack_master/scripts/99-f1tenth-input.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   (마우스 동글을 뽑았다 꽂으면 확실하다)
+#
+# 확인:
+#   ls -l /dev/input/by-id/*event-mouse   -> 0644 로 보이면 성공
+#
+# 참고: 0644 는 이 장치의 입력 이벤트를 로컬 사용자 누구나 읽을 수 있게 한다
+# (키 입력 장치가 아니라 마우스에만 적용). 그게 싫으면 아래 줄 대신
+#   ...,ENV{ID_INPUT_MOUSE}=="1", GROUP="input", MODE="0660"
+# 을 쓰고 `sudo usermod -aG input $USER` 후 재로그인할 것.
+KERNEL=="event*", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", MODE="0644"

@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """DACER++ 강화학습 정책(dacerpp_isaaclab) 실차 컨트롤러.
 
-Isaac Lab 에서 학습한 디퓨전 정책을 그대로 싣고, 학습 관측(58차원)을 실차
-토픽으로 재구성해 30Hz 로 /l1controller/control 을 발행한다. mux_controller 가
-그 값을 /drive 로 내보내므로 조이스틱 오버라이드와 /e_stop 이 그대로 살아 있다.
+Isaac Lab 에서 학습한 디퓨전 정책을 그대로 싣고, 학습 관측을 실차 토픽으로
+재구성해 30Hz 로 /l1controller/control 을 발행한다. mux_controller 가 그 값을
+/drive 로 내보내므로 조이스틱 오버라이드와 /e_stop 이 그대로 살아 있다.
+
+관측 차원은 config 의 curv_lookahead 길이 k 로 정해진다: 32 + 4 + 2k + 4 + 5 + 2.
+아래 인덱스는 **지금 실린 세대(k=6, obs_dim=60)** 기준이다. k=5 세대(obs_dim=58)를
+실으면 [41] 이후가 두 칸씩 당겨진다 — 노드는 차원을 계산해서 검사하므로 불일치는
+기동 시 에러로 막힌다(조용히 틀리지는 않는다).
 
 관측 구성 (dacerpp_lab/racing_env.py `_observe_car` 와 순서/정규화 동일):
     [0:32]  스캔 32빔 / 10m,  전방 ±135도   <- 벽 + 장애물 + 상대차가 모두 섞여 들어온다
     [32]    속력 / v_max(10)                <- 학습 정규화 상수, 주행 v_max 와 무관
     [33:35] sin/cos(헤딩오차)
     [35]    횡오차 / 지역 반폭   (±1 = 벽)
-    [36:41] 전방 곡률 5개  (+5/15/30/60/90 idx = 0.75/2.25/4.5/9/13.5m), ±2 클립
-    [41:47] 현재+전방 반폭 6개 / 2.5m
-    [47:51] 직전 2스텝의 '명령' 행동 (지연 하 Markov 복원용)
-    [51:56] 상대차량 5개 = [rel_x/10, rel_y/10, (v_self-v_opp)/10, gap_s/10, visible]
-    [56]    요레이트 / 4.0
-    [57]    횡속도 / 3.0
+    [36:42] 전방 곡률 6개  (+5/15/30/60/90/120 idx = 0.75/2.25/4.5/9/13.5/18m), ±3 클립
+    [42:49] 현재+전방 반폭 7개 / 2.5m
+    [49:53] 직전 2스텝의 '명령' 행동 (지연 하 Markov 복원용)
+    [53:58] 상대차량 5개 = [rel_x/10, rel_y/10, (v_self-v_opp)/10, gap_s/10, visible]
+    [58]    요레이트 / 4.0
+    [59]    횡속도 / 3.0
 
 장애물 vs 상대차 (학습 env_cfg.obstacles_enabled 주석 참조):
     학습은 두 가지를 '다른 채널'로 준다.
@@ -47,7 +52,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan, PointCloud2
 from std_msgs.msg import Float32MultiArray
 
-from .checkpoints import DEFAULT_CKPT, resolve_checkpoint
+from .checkpoints import (DEFAULT_CKPT, load_run_config, resolve_checkpoint,
+                          resolve_run)
 from .global_path import GlobalPath
 from .scan_builder import PseudoScanBuilder
 from .track_reference import TrackReference
@@ -70,6 +76,14 @@ class RLControllerNode(Node):
         # ---------------- 파라미터 ---------------- #
         p = self.declare_parameter
         p("checkpoint", DEFAULT_CKPT)
+        # 학습 런 폴더로 가중치를 고르는 경로 (launch 인자 ckpt_dir). 비어 있으면
+        # checkpoint 파라미터를 그대로 쓴다. 런 폴더 안에 날짜 폴더가 한 겹 더
+        # 있어도 알아서 찾는다 (models/20260822_5768/20260822_1/pow_healthy.pt).
+        p("ckpt_dir", "")
+        # 런 폴더의 run_config.json 에서 관측 규약(curv_lookahead / curv_clip)을
+        # 읽어 자동으로 맞춘다. ★curv_clip 은 틀려도 차원이 안 바뀌어 노드가 못
+        # 막는 값이라(= 조용히 틀린다), 체크포인트 옆의 학습 기록을 정답으로 삼는다.
+        p("obs_from_run_config", True)
         p("device", "cpu")                  # cpu / cuda / auto (젯슨 pip torch 는 cuda 커널 없음)
         p("torch_threads", 1)
         p("policy_seed", 0)
@@ -95,11 +109,12 @@ class RLControllerNode(Node):
         p("lidar_translation", [0.27, 0.0, 0.07])
         p("lidar_yaw", 1.5707963)
 
+        # ★아래 두 기본값은 **학습 env_cfg.RacingCfg 의 현재 기본값**과 맞춰 둔다
+        #   (2026-08-21 기준 (5,15,30,60,90) / 3.0). 실제 주행은 config yaml 이 항상
+        #   덮어쓰므로, 이건 yaml 없이 띄웠을 때 조용히 구세대 규약으로 도는 것을
+        #   막기 위한 것이다. curv_clip 은 차원이 안 바뀌어 틀려도 노드가 못 막는다.
         p("curv_lookahead", [5, 15, 30, 60, 90])
-        # 곡률 관측 클립. 학습 20260805 부터 ±1 -> ±2 (racing_env._observe_car 주석:
-        # 대회 코스는 |kappa| 가 1.93 까지 가는데 ±1 클립이 '급코너 vs 아주 급한 코너'를
-        # 뭉갰다). ±1 세대 체크포인트를 실을 때만 1.0 으로 되돌릴 것.
-        p("curv_clip", 2.0)
+        p("curv_clip", 3.0)
         p("hw_ref", 2.5)                    # 학습 0.5*TrackParams.width_max
         p("yawrate_norm", 4.0)
         p("vy_norm", 3.0)
@@ -166,9 +181,16 @@ class RLControllerNode(Node):
         torch = import_torch()
         torch.set_num_threads(max(1, int(g("torch_threads"))))
         device = resolve_device(torch, str(g("device")))
-        ckpt = resolve_checkpoint(str(g("checkpoint")))
+        ckpt_dir = str(g("ckpt_dir")).strip()
+        if ckpt_dir:
+            ckpt = resolve_run(ckpt_dir, str(g("checkpoint")))
+            self.get_logger().info(f"ckpt_dir='{ckpt_dir}' -> {ckpt}")
+        else:
+            ckpt = resolve_checkpoint(str(g("checkpoint")))
         if not os.path.isfile(ckpt):
             raise RuntimeError(f"체크포인트를 찾을 수 없습니다: {ckpt}")
+        if bool(g("obs_from_run_config")):
+            self._sync_obs_contract(load_run_config(ckpt))
 
         from .policy import DacerPolicy
         t0 = time.perf_counter()
@@ -261,6 +283,40 @@ class RLControllerNode(Node):
     # ------------------------------------------------------------------ #
     # 콜백
     # ------------------------------------------------------------------ #
+    def _sync_obs_contract(self, run_cfg: dict):
+        """체크포인트 옆 run_config.json 의 관측 규약을 채택한다.
+
+        yaml 과 다르면 **학습 기록 쪽을 쓰고** 크게 경고한다. 차원을 바꾸는
+        curv_lookahead 는 어차피 아래 차원 검사가 막아 주지만, curv_clip 은
+        차원이 그대로라 틀려도 아무도 못 막는다 — 그게 이 함수의 존재 이유다.
+        """
+        if not run_cfg:
+            self.get_logger().warn(
+                "체크포인트 옆에 run_config.json 이 없습니다 -> 관측 규약을 yaml 값 "
+                "그대로 씁니다. curv_clip 이 학습값과 다르면 조용히 틀립니다.")
+            return
+        src = run_cfg.get("_path", "run_config.json")
+        off = run_cfg.get("curv_lookahead")
+        if off is not None:
+            off = [int(v) for v in off]
+            if off != self.curv_off:
+                self.get_logger().warn(
+                    f"curv_lookahead 를 학습값으로 교정: yaml {self.curv_off} -> {off} "
+                    f"(출처 {src})")
+                self.curv_off = off
+                self.width_off = [0] + off
+        clip = run_cfg.get("curv_clip")
+        if clip is not None and abs(float(clip) - self.curv_clip) > 1e-9:
+            self.get_logger().warn(
+                f"curv_clip 을 학습값으로 교정: yaml {self.curv_clip} -> {float(clip)} "
+                f"(출처 {src}) ★이 값은 차원이 안 바뀌어 검사로는 못 잡는다")
+            self.curv_clip = float(clip)
+        mu = run_cfg.get("mu_range")
+        if mu is not None:
+            self.get_logger().info(
+                f"학습 노면 마찰 밴드 mu_range={mu} (실측 노면이 이 밴드보다 미끄러우면 "
+                f"코너에서 언더스티어 — 배포 시점에 고칠 수단이 없다)")
+
     def wpnt_cb(self, msg: WpntArray):
         if self.track is not None or not msg.wpnts:
             return

@@ -1,7 +1,0 @@
-image: hall_0821.png
-mode: trinary
-resolution: 0.05
-origin: [-2.745607, -5.857426, -0.481020]
-negate: 0
-occupied_thresh: 0.065
-free_thresh: 0.25

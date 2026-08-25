@@ -6,6 +6,10 @@
   <arg name="sim" default="False" description="True/False if you want to run simulation" />
   <arg name="loc_algorithm" default="slam" description="'slam' / 'synpf' to switch localisation algorithm" />
   <arg name="rviz" default="false" description="차에서 rviz2 실행 (초기 포즈 화살표용, 주행 시 false 권장)" />
+  <arg name="mouse_estop" default="true"
+    description="마우스 우클릭 한 번 = 정지, 다시 한 번 = 재출발 (조이스틱 e-stop 과 같은 래치)" />
+  <arg name="mouse_estop_backend" default="auto"
+    description="auto / evdev(권한 필요, X 없이 동작) / pynput(X11 전역 후킹)" />
 
   <let name="sensors_config" value="$(find-pkg-share stack_master)/config/sensors.yaml" />
   <let name="mux_config" value="$(find-pkg-share stack_master)/config/mux.yaml" />
@@ -80,6 +84,21 @@
     <param name="ltpl_max_widen" value="0.6" />
   </node>
 
+
+  <!-- 마우스 우클릭 e-stop 토글.
+       우클릭마다 /e_stop (std_msgs/Bool) 로 true(정지)/false(출발) 를 번갈아 낸다.
+       mux_controller 가 조이스틱 e-stop(Circle/Triangle)과 같은 래치를 쓰므로
+       마우스로 세우고 조이스틱으로 풀거나 그 반대도 된다.
+       백엔드 auto: /dev/input/event* 를 읽을 수 있으면 evdev, 아니면 pynput(X11).
+       evdev 를 쓰려면 stack_master/scripts/99-f1tenth-input.rules 를 설치할 것.
+       터미널에서 직접 세우는 명령은 stack_master/README.md 의 "정지 / 재출발" 절 참고.
+       (XML 주석 안에 대시 두 개를 못 써서 여기 명령을 그대로 적지 못한다.) -->
+  <node pkg="stack_master" name="mouse_estop" exec="mouse_estop" output="screen"
+    if="$(var mouse_estop)">
+    <param name="backend" value="$(var mouse_estop_backend)" />
+    <param name="button" value="right" />
+    <param name="debounce_ms" value="250" />
+  </node>
 
   <!-- launch sector tuner -->
   <node pkg="sector_tuner" name="sector_tuner" exec="sector_tuner">

@@ -1,0 +1,7 @@
+image: bexco.png
+mode: trinary
+resolution: 0.05
+origin: [-22.450869, -1.870272, -0.364943]
+negate: 0
+occupied_thresh: 0.065
+free_thresh: 0.25
