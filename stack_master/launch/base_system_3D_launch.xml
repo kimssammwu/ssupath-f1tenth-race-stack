@@ -6,6 +6,10 @@
   <arg name="sim" default="False" description="True/False if you want to run simulation" />
   <arg name="loc_algorithm" default="slam" description="'slam' / 'synpf' to switch localisation algorithm" />
   <arg name="rviz" default="false" description="차에서 rviz2 실행 (초기 포즈 화살표용, 주행 시 false 권장)" />
+  <!-- 로컬 실차 launch와 명령 호환을 위해 유지. 현재 BEXCO simulator에서는 bridge IMU를 사용한다. -->
+  <arg name="imu_mode" default="test" description="Compatibility argument for vehicle launch" />
+  <!-- 기본은 map_name과 같은 이름의 PCD. 예: maps/hall/hall.pcd -->
+  <arg name="pcd_file" default="$(var map_name).pcd" description="PCD file inside map_dir used as virtual Livox environment" />
 
   <let name="sensors_config" value="$(find-pkg-share stack_master)/config/sensors.yaml" />
   <let name="mux_config" value="$(find-pkg-share stack_master)/config/mux.yaml" />
@@ -14,41 +18,68 @@
   <let name="vesc_config"
     value="$(find-pkg-share stack_master)/config/$(var racecar_version)/vesc.yaml" />
 
-  <!-- Note: This is merely the share path (read-only) as the base_system
-    is not expected to modify maps in any way. -->
-
-  <!-- <let name="map_path" value="$(find-pkg-share stack_master)/maps/$(var map_name)" /> -->
   <let name="maps_root" value="$(find-pkg-prefix stack_master)/../../stack_master/maps" />
   <let name="map_path" value="$(var maps_root)/$(var map_dir)" />
+  <let name="pcd_path" value="$(var map_path)/$(var pcd_file)" />
 
-
-  <!-- launch simulator -->
+  <!--
+    PC SIL mode
+    -----------
+    Controller/planner/localization are the same nodes used on the vehicle.
+    Only hardware is replaced:
+      /drive -> f1tenth_gym -> GT pose
+      GT pose + static PCD -> /livox/lidar
+      GT odom -> /odom (wheel/vehicle odometry input)
+      simulated IMU -> /sensors/imu/raw
+    GT pose is private to the simulator side and is not used as localization output.
+  -->
   <group if="$(var sim)">
     <include file="$(find-pkg-share f1tenth_gym_ros)/launch/gym_bridge_launch.py">
-      <!-- <arg name="map_yaml_path" value="$(var map_path)/$(var map_name).yaml" /> -->
       <arg name="map_yaml_path" value="$(var map_path)/$(var map_name).yaml" />
     </include>
-    <!-- only needed in sim -->
+
+    <node pkg="stack_master" name="bexco_sim_bridge" exec="bexco_sim_bridge" output="screen">
+      <param name="pcd_path" value="$(var pcd_path)" />
+      <param name="odom_in" value="/car_state/odom_GT" />
+      <param name="imu_in" value="/vesc/sensors/imu/raw" />
+      <param name="odom_out" value="/odom" />
+      <param name="imu_out" value="/sensors/imu/raw" />
+      <param name="cloud_out" value="/livox/lidar" />
+      <param name="lidar_frame" value="livox_frame" />
+      <param name="map_voxel_size" value="0.04" />
+      <param name="cloud_rate" value="10.0" />
+      <param name="range_max" value="30.0" />
+      <!-- localization.launch.py의 base_link -> livox_frame static TF와 동일 -->
+      <param name="lidar_x" value="0.27" />
+      <param name="lidar_y" value="0.0" />
+      <param name="lidar_z" value="0.07" />
+      <param name="lidar_yaw" value="1.5707963267948966" />
+    </node>
+
+    <!-- 실차와 동일한 3D localization chain을 simulator에서도 실행한다. -->
+    <include file="$(find-pkg-share ekf_localizer)/launch/full_localization.launch.xml">
+      <arg name="rviz" value="$(var rviz)" />
+    </include>
+
     <include file="$(find-pkg-share frenet_odom_republisher)/launch/frenet_odom_republisher_launch.xml">
-      <arg name="frenet_bool" value="True" />   
+      <arg name="frenet_bool" value="True" />
     </include>
   </group>
 
-  <!-- launch real car system -->
+  <!-- launch real car system: existing behavior is intentionally unchanged -->
   <group unless="$(var sim)">
     <include file="/home/misys/forza_ws/race_stack/base_system/f1tenth_system/f1tenth_stack/launch/bringup_3D_launch.py">
       <arg name="joy_teleop_config" value="$(var joy_teleop_config)" />
       <arg name="vesc_config" value="$(var vesc_config)" />
       <arg name="sensors_config" value="$(var sensors_config)" />
       <arg name="mux_config" value="$(var mux_config)" />
-    </include> 
- 
-  <!-- launch 3D SE -->
-  <include file="/home/misys/forza_ws/race_stack/state_estimation/src/ekf_localizer/launch/full_localization.launch.xml">
+    </include>
+
+    <include file="/home/misys/forza_ws/race_stack/state_estimation/src/ekf_localizer/launch/full_localization.launch.xml">
       <arg name="map_name" value="$(var map_name)" />
       <arg name="frenet_bool" value="True" />
       <arg name="rviz" value="$(var rviz)" />
-  </include>
+    </include>
   </group>
 
   <!-- launch global parameter node -->
@@ -56,42 +87,21 @@
     <param name="racecar_version" value="$(var racecar_version)" />
     <param name="sim" value="$(var sim)" />
     <param name="map_path" value="$(var map_path)" />
-    <!-- Fails with l1 params for some reason
-    <param from="$(find-pkg-share stack_master)/config/$(var racecar_version)/l1_params.yaml" /> -->
     <param name="use_sim_time" value="$(var sim)" />
   </node>
 
   <!-- launch global trajectory republisher -->
   <node pkg="global_planner" name="global_republisher" exec="global_trajectory_publisher">
     <param name="map_path" value="$(var map_path)" />
-    <!-- 회피 corridor(= graph_planner 의 노드) 를 원본 맵 기준으로 넓힐지.
-         편집 맵(<map>.png)은 레이스라인을 다듬으려고 트랙 가장자리를 검게 칠한 것이라,
-         그 붓질이 그대로 회피용 노드를 지운다. 원본 맵(<map>_origin.png)의 진짜 벽까지
-         폭을 넓혀서 그걸 되돌린다. 실측(2026-08-21) 노드/레이어 중앙:
-           lobby_0820  9 -> 14,  hall_0820  8 -> 10,  hall_0821  5 -> 10
-         false 로 두면 예전 동작(편집 맵 폭 그대로). 원본 png 가 없으면 자동 폴백된다.
-         graph_planner 의 runOffline 은 첫 /ltpl_waypoints 에서 한 번만 도므로,
-         이 값을 바꾸면 graph_planner 를 재기동해야 반영된다.
-         배경/한계는 planner/global_planner/global_planner/origin_map_bounds.py 참조. -->
     <param name="ltpl_origin_widths" value="true" />
-    <!-- 한쪽 폭을 넓힐 수 있는 최대량 [m]. 편집으로 막아 둔 곳이 실제로는 넓은 홀과
-         이어져 있으면 노드가 홀 안까지 뻗을 수 있는데, 이 상한이 그걸 막는다.
-         트랙 경계가 벽이 아니라 테이프/콘으로 정의돼 있다면 작게(0.2~0.3) 잡을 것. -->
     <param name="ltpl_max_widen" value="0.6" />
   </node>
 
-
-  <!-- launch sector tuner -->
   <node pkg="sector_tuner" name="sector_tuner" exec="sector_tuner">
     <param from="$(var map_path)/speed_scaling.yaml" />
   </node>
 
-  <!-- launch ot sector tuner -->
   <node pkg="sector_tuner" name="ot_interpolator" exec="ot_interpolator">
     <param from="$(var map_path)/ot_sectors.yaml" />
   </node>
-
-  <!-- launch lap analyser -->
-  <!-- <node pkg="lap_analyser" name="lap_analyser" exec="lap_analyser" output="screen" /> -->
-
 </launch>
